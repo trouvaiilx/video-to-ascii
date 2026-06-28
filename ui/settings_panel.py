@@ -1,6 +1,14 @@
 """
 Settings Panel — all render configuration controls.
 Emits profile_changed(RenderProfile) whenever any control changes.
+
+Improvements:
+  - Collapsible sections (click header to toggle)
+  - Live spinbox next to every slider for direct value entry
+  - Reset button (↺) on every slider
+  - Tooltips on every control
+  - No max-width cap — panel is freely resizable
+  - Beginner-friendly labels and inline help text
 """
 
 from __future__ import annotations
@@ -9,16 +17,35 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QLineEdit,
     QPushButton, QScrollArea, QFrame, QRadioButton, QButtonGroup,
-    QSizePolicy, QSlider
+    QSizePolicy, QSlider, QToolButton
 )
 from presets.profiles import RenderProfile, PRESETS
-from ui.widgets import LabeledSlider, SectionHeader
-from ui.styles import ACCENT, TEXT_SECONDARY, BG_SURFACE, BORDER, TEXT_PRIMARY, TEXT_MUTED
+from ui.widgets import LabeledSlider, SectionHeader, CollapsibleSection
+from ui.styles import ACCENT, TEXT_SECONDARY, BG_SURFACE, BORDER, TEXT_PRIMARY, TEXT_MUTED, BG_RAISED
 
+
+# ── Helper for uniform form rows ──────────────────────────────────────────────
+
+def _form_row(label_text: str, widget: QWidget, tooltip: str = "") -> QHBoxLayout:
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    lbl = QLabel(label_text)
+    lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+    lbl.setMinimumWidth(130)
+    lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    if tooltip:
+        lbl.setToolTip(tooltip)
+        widget.setToolTip(tooltip)
+    row.addWidget(lbl)
+    row.addWidget(widget, 1)
+    return row
+
+
+# ── Settings Panel ─────────────────────────────────────────────────────────────
 
 class SettingsPanel(QScrollArea):
     """
-    Scrollable settings panel.
+    Scrollable, collapsible settings panel.
     All control changes immediately update self._profile and emit profile_changed.
     """
     profile_changed = pyqtSignal(object)  # RenderProfile
@@ -31,13 +58,13 @@ class SettingsPanel(QScrollArea):
 
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setMinimumWidth(320)
-        self.setMaximumWidth(380)
+        # No max-width — let the splitter control it
+        self.setMinimumWidth(280)
 
         container = QWidget()
         self._layout = QVBoxLayout(container)
-        self._layout.setContentsMargins(12, 12, 12, 12)
-        self._layout.setSpacing(8)
+        self._layout.setContentsMargins(8, 8, 8, 8)
+        self._layout.setSpacing(2)
         self.setWidget(container)
 
         self._build_preset_section()
@@ -54,27 +81,37 @@ class SettingsPanel(QScrollArea):
         self._layout.addStretch()
         self.load_profile(profile)
 
-    # ─── Section Builders ─────────────────────────────────────────────────────
+    # ── Section builders ──────────────────────────────────────────────────────
 
     def _build_preset_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Presets", "◈"))
+        sec = CollapsibleSection("Presets", "◈", collapsed=False)
 
         row = QHBoxLayout()
         self._preset_combo = QComboBox()
+        self._preset_combo.setToolTip("Load a saved preset configuration")
         self._refresh_presets()
         self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
         row.addWidget(self._preset_combo, 1)
 
         save_btn = QPushButton("Save")
         save_btn.setFixedWidth(52)
+        save_btn.setToolTip("Save current settings as a new preset")
         save_btn.clicked.connect(self._save_preset)
         row.addWidget(save_btn)
-        self._layout.addLayout(row)
+
+        sec.add_layout(row)
+        self._layout.addWidget(sec)
 
     def _build_ramp_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Character Ramp", "▓"))
+        sec = CollapsibleSection("Character Ramp", "▓", collapsed=False)
+
+        hint = QLabel("Characters used to represent brightness levels (dark → light).")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        hint.setWordWrap(True)
+        sec.add_widget(hint)
 
         self._ramp_combo = QComboBox()
+        self._ramp_combo.setToolTip("Choose a preset character ramp (dark to light)")
         self._ramp_combo.addItems([
             " .:-=+*#%@",
             " `·.,;:!|/\\tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",
@@ -83,195 +120,299 @@ class SettingsPanel(QScrollArea):
             "@%#*+=-:. ",
         ])
         self._ramp_combo.currentTextChanged.connect(self._on_ramp_changed)
-        self._layout.addWidget(self._ramp_combo)
+        sec.add_widget(self._ramp_combo)
 
         self._custom_ramp_chk = QCheckBox("Use Custom Ramp")
+        self._custom_ramp_chk.setToolTip("Override the preset ramp with your own characters")
         self._custom_ramp_chk.toggled.connect(self._on_custom_ramp_toggled)
-        self._layout.addWidget(self._custom_ramp_chk)
+        sec.add_widget(self._custom_ramp_chk)
 
         self._custom_ramp_edit = QLineEdit()
-        self._custom_ramp_edit.setPlaceholderText("Enter custom characters (dark→light)")
+        self._custom_ramp_edit.setPlaceholderText("e.g.  .:+#@  (dark → light)")
+        self._custom_ramp_edit.setToolTip("Enter characters from darkest (left) to brightest (right)")
         self._custom_ramp_edit.textChanged.connect(self._on_custom_ramp_changed)
         self._custom_ramp_edit.setEnabled(False)
-        self._layout.addWidget(self._custom_ramp_edit)
+        sec.add_widget(self._custom_ramp_edit)
+
+        self._layout.addWidget(sec)
 
     def _build_resolution_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Resolution", "⊞"))
+        sec = CollapsibleSection("Resolution", "⊞", collapsed=False)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Width (cols):"))
+        hint = QLabel("Width sets the number of character columns. Height=0 auto-fits the aspect ratio.")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        hint.setWordWrap(True)
+        sec.add_widget(hint)
+
         self._width_spin = QSpinBox()
         self._width_spin.setRange(20, 500)
         self._width_spin.setValue(120)
+        self._width_spin.setToolTip("Number of ASCII columns in the output (larger = more detail)")
         self._width_spin.valueChanged.connect(self._emit)
-        row.addWidget(self._width_spin)
-        self._layout.addLayout(row)
+        sec.add_layout(_form_row("Width (columns):", self._width_spin,
+                                 "Number of ASCII columns (20–500). More columns = higher resolution."))
 
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Height (rows, 0=auto):"))
         self._height_spin = QSpinBox()
         self._height_spin.setRange(0, 300)
         self._height_spin.setValue(0)
+        self._height_spin.setToolTip("Number of ASCII rows. Set to 0 to auto-calculate from aspect ratio.")
         self._height_spin.valueChanged.connect(self._emit)
-        row2.addWidget(self._height_spin)
-        self._layout.addLayout(row2)
+        sec.add_layout(_form_row("Height (rows, 0=auto):", self._height_spin,
+                                 "0 = auto-calculate from aspect ratio (recommended)"))
 
         self._aspect_chk = QCheckBox("Maintain Aspect Ratio")
         self._aspect_chk.setChecked(True)
+        self._aspect_chk.setToolTip("Prevent stretching by preserving the original video proportions")
         self._aspect_chk.toggled.connect(self._emit)
-        self._layout.addWidget(self._aspect_chk)
+        sec.add_widget(self._aspect_chk)
+
+        self._layout.addWidget(sec)
 
     def _build_image_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Image Adjustments", "◐"))
+        sec = CollapsibleSection("Image Adjustments", "◐", collapsed=False)
 
-        self._brightness_slider = LabeledSlider("Brightness", 0.1, 3.0, 1.0, decimals=2)
+        hint = QLabel("Tweak brightness/contrast before ASCII conversion. Default is 1.0 for all.")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        hint.setWordWrap(True)
+        sec.add_widget(hint)
+
+        self._brightness_slider = LabeledSlider(
+            "Brightness", 0.1, 3.0, 1.0, decimals=2,
+            tooltip="Multiply frame brightness before mapping to characters (1.0 = no change)"
+        )
         self._brightness_slider.value_changed.connect(self._emit)
-        self._layout.addWidget(self._brightness_slider)
+        sec.add_widget(self._brightness_slider)
 
-        self._contrast_slider = LabeledSlider("Contrast", 0.1, 3.0, 1.0, decimals=2)
+        self._contrast_slider = LabeledSlider(
+            "Contrast", 0.1, 3.0, 1.0, decimals=2,
+            tooltip="Scale frame contrast (1.0 = no change; higher = more harsh contrast)"
+        )
         self._contrast_slider.value_changed.connect(self._emit)
-        self._layout.addWidget(self._contrast_slider)
+        sec.add_widget(self._contrast_slider)
 
-        self._gamma_slider = LabeledSlider("Gamma", 0.1, 3.0, 1.0, decimals=2)
+        self._gamma_slider = LabeledSlider(
+            "Gamma", 0.1, 3.0, 1.0, decimals=2,
+            tooltip="Gamma correction exponent (1.0 = linear; <1.0 = brighter shadows; >1.0 = darker)"
+        )
         self._gamma_slider.value_changed.connect(self._emit)
-        self._layout.addWidget(self._gamma_slider)
+        sec.add_widget(self._gamma_slider)
+
+        self._layout.addWidget(sec)
 
     def _build_edge_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Edge Detection", "⌥"))
+        sec = CollapsibleSection("Edge Detection", "⌥", collapsed=True)
+
+        hint = QLabel("Overlay detected edges on the ASCII output to emphasise outlines.")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        hint.setWordWrap(True)
+        sec.add_widget(hint)
 
         edge_row = QHBoxLayout()
+        edge_row.setSpacing(12)
         self._edge_group = QButtonGroup()
         for label, val in [("Off", "none"), ("Canny", "canny"), ("Sobel", "sobel")]:
             rb = QRadioButton(label)
             rb.setProperty("edge_val", val)
+            tips = {
+                "none": "No edge detection",
+                "canny": "Canny — sharp, clean edges (good default)",
+                "sobel": "Sobel — softer gradient edges",
+            }
+            rb.setToolTip(tips[val])
             self._edge_group.addButton(rb)
             edge_row.addWidget(rb)
             if val == "none":
                 rb.setChecked(True)
         self._edge_group.buttonToggled.connect(self._emit)
-        self._layout.addLayout(edge_row)
+        sec.add_layout(edge_row)
 
-        self._canny_low = LabeledSlider("Canny Low", 0, 255, 50, decimals=0)
+        self._canny_low = LabeledSlider(
+            "Canny Low Threshold", 0, 255, 50, decimals=0,
+            tooltip="Lower hysteresis threshold for Canny edge detector (0–255)"
+        )
         self._canny_low.value_changed.connect(self._emit)
-        self._layout.addWidget(self._canny_low)
+        sec.add_widget(self._canny_low)
 
-        self._canny_high = LabeledSlider("Canny High", 0, 255, 150, decimals=0)
+        self._canny_high = LabeledSlider(
+            "Canny High Threshold", 0, 255, 150, decimals=0,
+            tooltip="Upper hysteresis threshold for Canny edge detector (0–255)"
+        )
         self._canny_high.value_changed.connect(self._emit)
-        self._layout.addWidget(self._canny_high)
+        sec.add_widget(self._canny_high)
 
-        self._edge_weight = LabeledSlider("Edge Weight", 0.0, 1.0, 0.5, decimals=2)
+        self._edge_weight = LabeledSlider(
+            "Edge Blend Weight", 0.0, 1.0, 0.5, decimals=2,
+            tooltip="How strongly edge lines are mixed into the final output (0=none, 1=full)"
+        )
         self._edge_weight.value_changed.connect(self._emit)
-        self._layout.addWidget(self._edge_weight)
+        sec.add_widget(self._edge_weight)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Sobel Ksize:"))
         self._sobel_ksize = QSpinBox()
         self._sobel_ksize.setRange(1, 15)
         self._sobel_ksize.setSingleStep(2)
         self._sobel_ksize.setValue(3)
+        self._sobel_ksize.setToolTip("Sobel kernel size — must be odd (1, 3, 5, …). Larger = blurrier edges.")
         self._sobel_ksize.valueChanged.connect(self._emit)
-        row.addWidget(self._sobel_ksize)
-        self._layout.addLayout(row)
+        sec.add_layout(_form_row("Sobel Kernel Size:", self._sobel_ksize,
+                                 "Kernel size for Sobel operator — odd numbers only (3 is default)"))
+
+        self._layout.addWidget(sec)
 
     def _build_dither_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Dithering", "⣿"))
+        sec = CollapsibleSection("Dithering", "⣿", collapsed=True)
+
+        hint = QLabel("Floyd–Steinberg dithering spreads quantisation error to neighbouring pixels, "
+                      "creating smoother gradients in the ASCII output.")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        hint.setWordWrap(True)
+        sec.add_widget(hint)
+
         self._dither_chk = QCheckBox("Floyd–Steinberg Dithering")
+        self._dither_chk.setToolTip("Enable error-diffusion dithering for smoother gradients")
         self._dither_chk.toggled.connect(self._emit)
-        self._layout.addWidget(self._dither_chk)
+        sec.add_widget(self._dither_chk)
+
+        self._layout.addWidget(sec)
 
     def _build_color_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Colorization", "◉"))
-        self._color_chk = QCheckBox("Colorized ASCII")
-        self._color_chk.toggled.connect(self._emit)
-        self._layout.addWidget(self._color_chk)
+        sec = CollapsibleSection("Colorization", "◉", collapsed=True)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Color Mode:"))
+        hint = QLabel("Colorized mode renders each character in the original video's color "
+                      "rather than a single foreground color.")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        hint.setWordWrap(True)
+        sec.add_widget(hint)
+
+        self._color_chk = QCheckBox("Enable Colorized ASCII")
+        self._color_chk.setToolTip("Render each ASCII character using the source pixel's color")
+        self._color_chk.toggled.connect(self._emit)
+        sec.add_widget(self._color_chk)
+
         self._color_mode = QComboBox()
         self._color_mode.addItems(["rgb_image", "ansi", "terminal_256"])
+        self._color_mode.setToolTip(
+            "rgb_image: full color PNG/MP4 output\n"
+            "ansi: ANSI escape codes in text output\n"
+            "terminal_256: 256-color terminal palette"
+        )
         self._color_mode.currentTextChanged.connect(self._emit)
-        row.addWidget(self._color_mode)
-        self._layout.addLayout(row)
+        sec.add_layout(_form_row("Color Mode:", self._color_mode))
 
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("BG:"))
         self._bg_color = QLineEdit("#000000")
-        self._bg_color.setMaximumWidth(80)
+        self._bg_color.setMaximumWidth(100)
+        self._bg_color.setToolTip("Background fill color as hex (e.g. #000000 for black)")
         self._bg_color.textChanged.connect(self._emit)
-        row2.addWidget(self._bg_color)
-        row2.addWidget(QLabel("FG:"))
+
         self._fg_color = QLineEdit("#00FF00")
-        self._fg_color.setMaximumWidth(80)
+        self._fg_color.setMaximumWidth(100)
+        self._fg_color.setToolTip("Foreground (character) color as hex — used when colorization is OFF")
         self._fg_color.textChanged.connect(self._emit)
-        row2.addWidget(self._fg_color)
-        row2.addStretch()
-        self._layout.addLayout(row2)
+
+        color_row = QHBoxLayout()
+        color_row.setSpacing(6)
+        bg_lbl = QLabel("Background:")
+        bg_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        fg_lbl = QLabel("Foreground:")
+        fg_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        color_row.addWidget(bg_lbl)
+        color_row.addWidget(self._bg_color)
+        color_row.addSpacing(8)
+        color_row.addWidget(fg_lbl)
+        color_row.addWidget(self._fg_color)
+        color_row.addStretch()
+        sec.add_layout(color_row)
+
+        self._layout.addWidget(sec)
 
     def _build_font_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Font", "Aa"))
+        sec = CollapsibleSection("Font", "Aa", collapsed=True)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Font:"))
+        hint = QLabel("The font affects character width/height ratio and readability of the ASCII output.")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        hint.setWordWrap(True)
+        sec.add_widget(hint)
+
         self._font_combo = QComboBox()
         self._font_combo.addItems([
             "Courier New", "Consolas", "Fira Code", "JetBrains Mono",
             "DejaVu Sans Mono", "Lucida Console", "Cascadia Code"
         ])
+        self._font_combo.setToolTip("Monospace font used to render ASCII characters into the output image")
         self._font_combo.currentTextChanged.connect(self._emit)
-        row.addWidget(self._font_combo)
-        self._layout.addLayout(row)
+        sec.add_layout(_form_row("Font Family:", self._font_combo))
 
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Font Size:"))
         self._font_size = QSpinBox()
         self._font_size.setRange(6, 32)
         self._font_size.setValue(10)
+        self._font_size.setToolTip("Font point size — smaller = more characters fit, larger = more legible")
         self._font_size.valueChanged.connect(self._emit)
-        row2.addWidget(self._font_size)
-        self._layout.addLayout(row2)
+        sec.add_layout(_form_row("Font Size (pt):", self._font_size,
+                                 "Point size for rendered characters (6–32). Smaller = more detail."))
+
+        self._layout.addWidget(sec)
 
     def _build_temporal_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Temporal", "⏱"))
+        sec = CollapsibleSection("Temporal / FPS", "⏱", collapsed=True)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Frame Skip:"))
+        hint = QLabel("Control the output frame rate. Skipping frames speeds up encoding but reduces smoothness.")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        hint.setWordWrap(True)
+        sec.add_widget(hint)
+
         self._frame_skip = QSpinBox()
         self._frame_skip.setRange(0, 30)
         self._frame_skip.setValue(0)
+        self._frame_skip.setToolTip(
+            "Process every Nth frame (0 = all frames; 1 = every 2nd; 2 = every 3rd). "
+            "Higher values encode faster but output is less smooth."
+        )
         self._frame_skip.valueChanged.connect(self._emit)
-        row.addWidget(self._frame_skip)
-        self._layout.addLayout(row)
+        sec.add_layout(_form_row("Frame Skip (0=none):", self._frame_skip,
+                                 "Skip N frames between renders. 0 = process every frame."))
 
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Target FPS (0=src):"))
         self._target_fps = QDoubleSpinBox()
         self._target_fps.setRange(0, 120)
         self._target_fps.setValue(0)
         self._target_fps.setSingleStep(1.0)
+        self._target_fps.setToolTip("Target output FPS. 0 = match source video FPS.")
         self._target_fps.valueChanged.connect(self._emit)
-        row2.addWidget(self._target_fps)
-        self._layout.addLayout(row2)
+        sec.add_layout(_form_row("Target FPS (0=source):", self._target_fps,
+                                 "Set a custom output framerate, or 0 to use the source FPS."))
+
+        self._layout.addWidget(sec)
 
     def _build_output_section(self) -> None:
-        self._layout.addWidget(SectionHeader("Output", "▤"))
+        sec = CollapsibleSection("Output", "▤", collapsed=False)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Format:"))
         self._output_format = QComboBox()
         self._output_format.addItems(["mp4", "gif", "image_seq", "txt_stream"])
+        self._output_format.setToolTip(
+            "mp4: H.264 video file\n"
+            "gif: Animated GIF (large file, no audio)\n"
+            "image_seq: One PNG per frame\n"
+            "txt_stream: Plain-text ASCII file"
+        )
         self._output_format.currentTextChanged.connect(self._emit)
-        row.addWidget(self._output_format)
-        self._layout.addLayout(row)
+        sec.add_layout(_form_row("Format:", self._output_format))
 
-        self._quality_slider = LabeledSlider("Quality (CRF, lower=better)", 0, 51, 23, decimals=0)
+        self._quality_slider = LabeledSlider(
+            "Quality (CRF)", 0, 51, 23, decimals=0,
+            tooltip="H.264 Constant Rate Factor: lower = better quality, larger file. 18 is near-lossless; 28 is decent."
+        )
         self._quality_slider.value_changed.connect(self._emit)
-        self._layout.addWidget(self._quality_slider)
+        sec.add_widget(self._quality_slider)
 
-        self._gpu_chk = QCheckBox("GPU Acceleration (NVENC/CUDA if available)")
+        self._gpu_chk = QCheckBox("GPU Acceleration  (NVENC/CUDA)")
+        self._gpu_chk.setToolTip(
+            "Use NVIDIA hardware encoding if available — significantly faster for large videos. "
+            "Falls back to CPU if no compatible GPU is found."
+        )
         self._gpu_chk.toggled.connect(self._emit)
-        self._layout.addWidget(self._gpu_chk)
+        sec.add_widget(self._gpu_chk)
 
-    # ─── Profile I/O ──────────────────────────────────────────────────────────
+        self._layout.addWidget(sec)
+
+    # ── Profile I/O ───────────────────────────────────────────────────────────
 
     def load_profile(self, profile: RenderProfile) -> None:
         """Populate all controls from a profile without emitting."""
@@ -337,19 +478,16 @@ class SettingsPanel(QScrollArea):
             self._updating = False
 
     def _read_profile(self) -> RenderProfile:
-        """Read all controls and build a new RenderProfile."""
         edge_val = "none"
         for btn in self._edge_group.buttons():
             if btn.isChecked():
                 edge_val = btn.property("edge_val")
                 break
 
-        ramp = self._ramp_combo.currentText()
-
         return RenderProfile(
             name=self._profile.name,
             description=self._profile.description,
-            char_ramp=ramp,
+            char_ramp=self._ramp_combo.currentText(),
             custom_ramp=self._custom_ramp_edit.text(),
             use_custom_ramp=self._custom_ramp_chk.isChecked(),
             width=self._width_spin.value(),

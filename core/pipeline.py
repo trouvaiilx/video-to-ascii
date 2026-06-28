@@ -226,7 +226,8 @@ class FramePipeline:
                     # Write raw BGR bytes to ffmpeg stdin
                     try:
                         proc.stdin.write(ascii_img.tobytes())
-                    except BrokenPipeError:
+                    except (BrokenPipeError, OSError) as e:
+                        logger.error(f"FFmpeg pipeline broken: {e}")
                         break
 
                     out_frame_idx += 1
@@ -374,6 +375,7 @@ class FramePipeline:
             "-c:v", codec,
             *crf_flag,
             "-pix_fmt", "yuv420p",
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-movflags", "+faststart",
             "-shortest",
             output_path,
@@ -390,6 +392,7 @@ class FramePipeline:
             "-c:v", codec,
             *crf_flag,
             "-pix_fmt", "yuv420p",
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-movflags", "+faststart",
             output_path,
         ]
